@@ -53,8 +53,17 @@
   .btn-pink:hover { transform: scale(1.07); }
   .btn-ghost { background: #efe9f2; color: #9a8aa0; }
   .btn-mint { background: linear-gradient(135deg, #a9ecc9, #7fdcae); color: #2f6b4f; }
-  .runaway { transition: left .25s ease, top .25s ease, transform .15s ease; }
-  .runaway.fleeing { position: fixed; z-index: 50; }
+  .runaway {
+    transition: left .65s cubic-bezier(.22,.85,.35,1.1), top .65s cubic-bezier(.22,.85,.35,1.1);
+  }
+  .runaway.fleeing {
+    position: fixed; z-index: 50;
+    animation: fleeWobble 1.1s ease-in-out infinite;
+  }
+  @keyframes fleeWobble {
+    0%,100% { transform: rotate(-5deg) translateY(0); }
+    50% { transform: rotate(5deg) translateY(-6px); }
+  }
 
   /* ---------- Scene 1 : Night ---------- */
   #scene1 { background: linear-gradient(180deg, var(--night1), var(--night2) 70%, #4d4a80); }
@@ -438,26 +447,84 @@ const $ = (id) => document.getElementById(id);
 /* ---------- scene switching ---------- */
 function gotoScene(n) {
   document.querySelectorAll('.scene').forEach(s => s.classList.remove('active'));
-  $('scene' + n).classList.add('active');
+  const target = $('scene' + n);
+  target.classList.add('active');
+  // ปุ่มหนีที่ถูกย้ายไปลอยใต้ body: ถ้าไม่ใช่ของหน้านี้ให้ซ่อน
+  document.querySelectorAll('.runaway.fleeing').forEach(b => {
+    if (b._home !== target) b.style.display = 'none';
+  });
 }
 
 /* ---------- runaway button (หนี mouse + นิ้ว) ---------- */
 function makeRunaway(btn, messages) {
-  let msgIdx = 0;
+  let msgIdx = 0, pinned = false;
+  let curX = 0, curY = 0, bw = 0, bh = 0; // จำตำแหน่ง/ขนาดเอง ไม่วัดใหม่ระหว่างบิน
+
   const flee = (e) => {
     e.preventDefault();
-    btn.classList.add('fleeing');
-    const pad = 20;
-    const bw = btn.offsetWidth, bh = btn.offsetHeight;
-    const maxX = window.innerWidth - bw - pad;
-    const maxY = window.innerHeight - bh - pad;
-    btn.style.left = (pad + Math.random() * Math.max(maxX - pad, 1)) + 'px';
-    btn.style.top  = (pad + Math.random() * Math.max(maxY - pad, 1)) + 'px';
+
+    // ครั้งแรก: ปักตำแหน่งปัจจุบันก่อน (จะได้ "ลอย" ออกไป ไม่ใช่วาป)
+    if (!pinned) {
+      const r = btn.getBoundingClientRect();
+      bw = r.width; bh = r.height;
+      curX = r.left; curY = r.top;
+      // สำคัญ! parent มี transform ทำให้ position:fixed ยึดผิดที่
+      // → ย้ายปุ่มไปอยู่ใต้ body ตรงๆ ให้ fixed ยึดกับจอจริงๆ
+      btn._home = btn.closest('.scene');
+      document.body.appendChild(btn);
+      btn.style.left = curX + 'px';
+      btn.style.top = curY + 'px';
+      btn.classList.add('fleeing');
+      void btn.offsetWidth; // force reflow ให้ transition ทำงาน
+      pinned = true;
+    }
+
+    // กรอบที่อนุญาตให้อยู่ = จอทั้งหมด เว้นขอบ 32px (ปุ่มเห็นเต็มตัวเสมอ)
+    const pad = 32;
+    const minX = pad, minY = pad;
+    const maxX = Math.max(minX, window.innerWidth - bw - pad);
+    const maxY = Math.max(minY, window.innerHeight - bh - pad);
+
+    const px = e.clientX ?? (e.touches && e.touches[0].clientX) ?? (curX + bw / 2);
+    const py = e.clientY ?? (e.touches && e.touches[0].clientY) ?? (curY + bh / 2);
+
+    // สุ่มจุดใหม่: ระยะบินสั้นๆ (ดูเป็นการหลบ) + ต้องอยู่ในกรอบ + ห่างจาก mouse พอ
+    let nx = curX, ny = curY;
+    for (let i = 0; i < 24; i++) {
+      let ang = Math.atan2((curY + bh / 2) - py, (curX + bw / 2) - px); // ทิศหนีจาก mouse
+      ang += (Math.random() - 0.5) * (i < 8 ? 1.2 : Math.PI * 2); // ถ้าหนีทิศเดิมไม่ได้ ค่อยสุ่มทิศอื่น
+      const dist = 130 + Math.random() * 120;
+      nx = Math.min(maxX, Math.max(minX, curX + Math.cos(ang) * dist));
+      ny = Math.min(maxY, Math.max(minY, curY + Math.sin(ang) * dist));
+      const far = Math.hypot(nx + bw / 2 - px, ny + bh / 2 - py) > 140;
+      const moved = Math.hypot(nx - curX, ny - curY) > 60;
+      if (far && moved) break;
+      // มุมอับ (โดนต้อนเข้าขอบ) → เด้งกลับโซนกลางจอ
+      if (i === 23) {
+        nx = minX + (maxX - minX) * (0.3 + Math.random() * 0.4);
+        ny = minY + (maxY - minY) * (0.3 + Math.random() * 0.4);
+      }
+    }
+
+    curX = nx; curY = ny;
+    btn.style.left = nx + 'px';
+    btn.style.top = ny + 'px';
     if (messages && messages.length) {
       btn.textContent = messages[msgIdx % messages.length];
       msgIdx++;
     }
   };
+
+  // ถ้าจอถูก resize แล้วปุ่มหลุดกรอบ → ดึงกลับ
+  window.addEventListener('resize', () => {
+    if (!pinned) return;
+    const pad = 32;
+    curX = Math.min(Math.max(pad, curX), Math.max(pad, window.innerWidth - bw - pad));
+    curY = Math.min(Math.max(pad, curY), Math.max(pad, window.innerHeight - bh - pad));
+    btn.style.left = curX + 'px';
+    btn.style.top = curY + 'px';
+  });
+
   btn.addEventListener('pointerenter', flee);
   btn.addEventListener('touchstart', flee, { passive: false });
   btn.addEventListener('click', (e) => { e.preventDefault(); flee(e); });
@@ -503,7 +570,10 @@ function showToast() {
   };
   setTimeout(type, 700);
 
-  $('btnHere').addEventListener('click', () => gotoScene(2));
+  $('btnHere').addEventListener('click', () => {
+    unlockAudio(); // ปลดล็อก autoplay ด้วย gesture แรก
+    gotoScene(2);
+  });
   makeRunaway($('btnNotHere'), ['ไม่อยู่', 'เอ๊ะ!', 'จับไม่ได้~', 'แง้ว 😝', 'กดไม่ได้หรอกก']);
 })();
 
@@ -581,6 +651,7 @@ function showToast() {
   $('btnGift').addEventListener('click', () => {
     $('afterAudio').classList.remove('show');
     $('uploadArea').classList.add('show');
+    $('btnNoGift').style.display = 'none'; // ปุ่มดื้อที่ลอยอยู่ก็ซ่อนไปด้วย
   });
   const noBtn = $('btnNoGift');
   makeRunaway(noBtn, ['ไม่เอาา', 'อ๊ะๆ!', 'หนีได้ด้วย~', '😝']);
@@ -644,8 +715,43 @@ function showToast() {
    SCENE 3 : Happy Birthday
    ============================================================ */
 let birthdayStarted = false;
+let birthdayWanted = false;
+let audioUnlocked = false;
+
+// เล่นเงียบๆ 1 ครั้งตอน user คลิกครั้งแรก → browser จะอนุญาต autoplay ทีหลัง
+function unlockAudio() {
+  if (audioUnlocked) return;
+  const song = $('birthdayAudio');
+  song.muted = true;
+  song.play().then(() => {
+    song.pause();
+    song.currentTime = 0;
+    song.muted = false;
+    audioUnlocked = true;
+  }).catch(() => { song.muted = false; });
+}
+
+// เพลงวันเกิด: ลองหลายชื่อไฟล์เผื่อชื่อไม่ตรง
+(function initBirthdaySong() {
+  const song = $('birthdayAudio');
+  const names = [
+    'happy-birthday.mp3', 'happy_birthday.mp3', 'happybirthday.mp3',
+    'happy-birthday.m4a', 'hbd.mp3'
+  ];
+  let idx = 0;
+  song.addEventListener('error', () => {
+    idx++;
+    if (idx < names.length) {
+      song.src = names[idx];
+      song.load();
+      if (birthdayWanted) song.play().then(() => { birthdayStarted = true; }).catch(() => {});
+    }
+  });
+})();
+
 function startBirthdaySong() {
   if (birthdayStarted) return;
+  birthdayWanted = true;
   const song = $('birthdayAudio');
   song.volume = 0.85;
   song.play().then(() => { birthdayStarted = true; })
@@ -656,11 +762,28 @@ $('musicFallback').addEventListener('click', function () {
   this.style.display = 'none';
 });
 
-// รูปหาย → โชว์ placeholder แทน
-$('myPhoto').addEventListener('error', function () {
-  this.style.display = 'none';
-  document.querySelector('.photo-ph').style.display = 'block';
-});
+// รูป: ลองหลายชื่อ/นามสกุลอัตโนมัติ ถ้าไม่เจอเลยค่อยโชว์ placeholder
+(function initPhoto() {
+  const photo = $('myPhoto');
+  const sources = [
+    'my-photo.jpg', 'my-photo.jpeg', 'my-photo.png', 'my-photo.webp',
+    'my-photo.JPG', 'my-photo.JPEG', 'my-photo.PNG',
+    'my_photo.jpg', 'myphoto.jpg'
+  ];
+  let idx = 0;
+  const tryNext = () => {
+    idx++;
+    if (idx < sources.length) {
+      photo.src = sources[idx];
+    } else {
+      photo.style.display = 'none';
+      document.querySelector('.photo-ph').style.display = 'block';
+    }
+  };
+  photo.addEventListener('error', tryNext);
+  // เผื่อ error เกิดก่อน script โหลดเสร็จ
+  if (photo.complete && photo.naturalWidth === 0) tryNext();
+})();
 
 function gotoScene3() {
   gotoScene(3);
